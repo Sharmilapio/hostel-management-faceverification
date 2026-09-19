@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, Dict
@@ -31,6 +31,7 @@ class FaceDetectionDetails(BaseModel):
 class VerifyResponse(BaseModel):
     verified: bool = Field(description='True if both images belong to the same person, False otherwise')
     similarity_score: float = Field(description='Cosine similarity score between embeddings [-1.0 to 1.0]')
+    face_matching_percentage: float = Field(description='Face match percentage [0 to 100], derived from similarity_score')
     threshold: float = Field(description='Cosine similarity threshold applied')
     face_detected: FaceDetectionDetails
     message: str = Field(description='User-friendly result or diagnostic message')
@@ -68,15 +69,8 @@ async def health_check():
 
 class VerifyRequest(BaseModel):
     base_image: str = Field(..., description="Public or accessible URL of the registered base photo")
-    captured_image: Optional[str] = Field(default=None, description="Public or accessible URL of the live captured photo")
-    capture_image: Optional[str] = Field(default=None, description="Alternative field name for captured photo URL")
+    captured_image: str = Field(..., description="Public or accessible URL of the live captured photo")
     threshold: Optional[float] = Field(default=DEFAULT_VERIFICATION_THRESHOLD, description="Verification similarity threshold (default: 0.50)")
-
-    def get_captured_url(self) -> str:
-        url = self.captured_image or self.capture_image
-        if not url:
-            raise ValueError("Field 'captured_image' (or 'capture_image') URL is required.")
-        return url
 
 @app.post('/face/verify', response_model=VerifyResponse, tags=['Face Verification'])
 async def api_verify_face(payload: VerifyRequest):
@@ -92,24 +86,17 @@ async def api_verify_face(payload: VerifyRequest):
     Fetches both images over the internet, performs CNN-based face detection
     and ArcFace feature extraction, and returns whether both belong to the same person.
     """
-    try:
-        captured_url = payload.get_captured_url()
-    except ValueError as val_err:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(val_err)
-        )
-
     # Perform AI Face Verification using URLs directly
     result = verify_face(
         base_image=payload.base_image,
-        capture_image=captured_url,
+        capture_image=payload.captured_image,
         threshold=payload.threshold if payload.threshold is not None else DEFAULT_VERIFICATION_THRESHOLD
     )
 
     return VerifyResponse(
         verified=result['verified'],
         similarity_score=result['similarity_score'],
+        face_matching_percentage=result['face_matching_percentage'],
         threshold=result['threshold'],
         face_detected=FaceDetectionDetails(
             base_image=result['face_detected']['base_image'],
